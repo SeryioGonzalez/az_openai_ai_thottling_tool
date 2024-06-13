@@ -27,6 +27,8 @@ AZ_OAI_DEPLOYMENTS = [
     "gpt-4-32k-0613"
 ]
 `
+Change it to whatever works for you
+
 The tool will just send an arbitary number of tokens from Hamlet and ask the LLM to classify the novel and author. 
 
 ![Script execution](output.jpg "Script execution")
