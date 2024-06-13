@@ -40,6 +40,8 @@ max_token_limits = {'no': None, 'small': 100, 'large': 2000}
 AZURE_OPENAI_API_VERSION="2024-05-01-preview"
 LARGE_TEXT_FILE_PATH = 'hamlet.txt'
 
+# We will make sure there is at least 60 seconds between consecutive calls to a given deployment
+
 def construct_text_from_tokens(token_list):
     # Initialize an empty string to build the sentence
     sentence = ""
@@ -120,13 +122,21 @@ experiment_list = [
 colorama_init(autoreset=True)
 
 # Initializing token count
+last_call_to_deployments = { deployment: None for deployment in AZ_OAI_DEPLOYMENTS}
 
 for experiment_index, experiment_data in enumerate(experiment_list):
-    
     experiment_name            = experiment_data['experiment_name']
     experiment_prompt_size     = experiment_data['prompt_size']
     experiment_max_token_limit = experiment_data['max_token_limit']
     az_openai_deployment       = experiment_data['deployment']
+
+    # In order not to contaminate the experiment, we need to make sure the time between calls to the same deployment is at least 60 seconds so token count get reset
+    if last_call_to_deployments[az_openai_deployment] is not None:
+        time_since_last_call_to_this_deployment = time.time() - last_call_to_deployments[az_openai_deployment]
+        if time_since_last_call_to_this_deployment < 60:
+            needed_nap = 60 - time_since_last_call_to_this_deployment
+            print(f"Sleeping for {needed_nap} seconds to respect the 60 seconds between calls to deployment {az_openai_deployment}")
+            time.sleep(needed_nap)
 
     # HTTP INFO
     az_openai_url = f"{AZURE_OPENAI_ENDPOINT}/openai/deployments/{az_openai_deployment}/chat/completions?api-version=2024-02-15-preview"
@@ -141,7 +151,7 @@ for experiment_index, experiment_data in enumerate(experiment_list):
         while time.time() - experiment_start_time < EXPERIMENT_TIMEOUT_SECONDS:
             # Set the max tokens in the header
             if experiment_max_token_limit is not None:
-                headers['max-tokens'] = str(experiment_max_token_limit)
+                data['max_tokens'] = experiment_max_token_limit
 
             # Send request
             response = requests.post(az_openai_url, headers=headers, json=data)
@@ -187,6 +197,7 @@ for experiment_index, experiment_data in enumerate(experiment_list):
         experiment_status = 'Failure'
 
     experiment_list[experiment_index]['experiment_result'] = experiment_status
-    
+    last_call_to_deployments[az_openai_deployment] = time.time()
+
     print("")
 
