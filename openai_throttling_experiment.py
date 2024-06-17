@@ -3,39 +3,47 @@ from colorama import init as colorama_init
 from itertools import product
 from nltk.tokenize import word_tokenize
 
+import json
 import nltk
 import os
 import requests
 import time
 
-# Environment variables
-AZURE_OPENAI_API_KEY  = os.environ.get("AZURE_OPENAI_API_KEY")
-AZURE_OPENAI_ENDPOINT = os.environ.get("AZURE_OPENAI_ENDPOINT")
 
-# Some deployments will not ever get throttled, so we need a timeout for finishing the test
+# Environment variables
+OPENAI_API_KEY  = os.environ.get("OPENAI_API_KEY")
+
+# Some models will not ever get throttled, so we need a timeout for finishing the test
 EXPERIMENT_TIMEOUT_SECONDS = 20
 
-# Define the list with specified deployment names. 
-# In the previous AZ CLI scripts, deployment name follow a model_name-mode_version naming
-AZ_OAI_DEPLOYMENTS = [
-    "gpt-4-1106",
-    "gpt-4-0613",
-    "gpt-4-vision-preview",
-    "gpt-4-turbo-2024-04-09",
-    "gpt-4o-2024-05-13",
-    "gpt-35-turbo-0613",
-    "gpt-35-turbo-1106",
-    "gpt-35-turbo-16k-0613",
-    "gpt-4-32k-0613"
+# Define the list with specified model names. 
+# In the previous AZ CLI scripts, model name follow a model_name-mode_version naming
+OPENAI_MODELS = [
+    "gpt-3.5-turbo-1106", 
+    "gpt-3.5-turbo-0613"    
 ]
 
-AZ_OAI_DEPLOYMENTS = [
-    "gpt-35-turbo-0613"
-]
+
+openai_completion_url = f"https://api.openai.com/v1/chat/completions"
+openai_model_url = "https://api.openai.com/v1/models"
+
+openai_api_headers = {
+    'Authorization': f'Bearer {OPENAI_API_KEY}',
+    'Content-Type': 'application/json',
+}
+
+"""
+response = requests.get(openai_model_url, headers=openai_api_headers)
+json_response = json.loads(response.text)
+model_names = [model['id'] for model in json_response['data']]
+print(model_names )
+
+"""
+
 
 # Set up combinations of prompt sizes and max token limits for experiments
 prompt_sizes     = {'tiny': 20, 'small': 100, 'large': 3400}
-prompt_sizes     = {'small': 100, 'large': 3400}
+prompt_sizes     = {'large': 7000}
 max_token_limits = {'none': None, 'tiny': 20, 'small': 100, 'medium':600, 'large': 2000}
 
 #############################################
@@ -45,7 +53,7 @@ max_token_limits = {'none': None, 'tiny': 20, 'small': 100, 'medium':600, 'large
 AZURE_OPENAI_API_VERSION="2024-05-01-preview"
 LARGE_TEXT_FILE_PATH = 'hamlet.txt'
 
-# We will make sure there is at least 60 seconds between consecutive calls to a given deployment
+# We will make sure there is at least 60 seconds between consecutive calls to a given model
 
 def construct_text_from_tokens(token_list):
     # Initialize an empty string to build the sentence
@@ -116,7 +124,7 @@ def generate_message_list_with_token_length(tokens_in_prompt):
 
 experiment_list = [
     {
-        'deployment': deployment,
+        'model': model,
         'experiment_name': f'{size}_prompt_{limit}_max_tokens',
         'prompt_size': prompt_sizes[size],
         'max_token_limit': max_token_limits[limit],
@@ -124,38 +132,39 @@ experiment_list = [
     }
     for size in prompt_sizes  # Iterate over prompt sizes
     for limit in max_token_limits  # Iterate over token limits
-    for deployment in AZ_OAI_DEPLOYMENTS
+    for model in OPENAI_MODELS
 ]
 
 # Reseting color
 colorama_init(autoreset=True)
 
 # Initializing token count
-last_call_to_deployments = { deployment: None for deployment in AZ_OAI_DEPLOYMENTS}
+last_call_to_models = { model: None for model in OPENAI_MODELS}
 
 for experiment_index, experiment_data in enumerate(experiment_list):
     experiment_name            = experiment_data['experiment_name']
     experiment_prompt_size     = experiment_data['prompt_size']
     experiment_max_token_limit = experiment_data['max_token_limit']
-    az_openai_deployment       = experiment_data['deployment']
+    openai_model               = experiment_data['model']
 
-    # In order not to contaminate the experiment, we need to make sure the time between calls to the same deployment is at least 60 seconds so token count get reset
-    if last_call_to_deployments[az_openai_deployment] is not None:
-        time_since_last_call_to_this_deployment = time.time() - last_call_to_deployments[az_openai_deployment]
-        if time_since_last_call_to_this_deployment < 60:
-            needed_nap = 60 - time_since_last_call_to_this_deployment + 1
-            print(f"Sleeping for {needed_nap} seconds to respect the 60 seconds between calls to deployment {az_openai_deployment}")
+    # In order not to contaminate the experiment, we need to make sure the time between calls to the same model is at least 60 seconds so token count get reset
+    if last_call_to_models[openai_model] is not None:
+        time_since_last_call_to_this_model = time.time() - last_call_to_models[openai_model]
+        if time_since_last_call_to_this_model < 60:
+            needed_nap = 60 - time_since_last_call_to_this_model + 1
+            print(f"Sleeping for {needed_nap} seconds to respect the 60 seconds between calls to model {openai_model}")
             time.sleep(needed_nap)
 
     # HTTP INFO
-    az_openai_url = f"{AZURE_OPENAI_ENDPOINT}/openai/deployments/{az_openai_deployment}/chat/completions?api-version=2024-02-15-preview"
-    headers = {'api-key': AZURE_OPENAI_API_KEY, 'Content-Type': 'application/json'}
-    data = {'messages': generate_message_list_with_token_length(experiment_prompt_size)}
+    data = {
+        'messages': generate_message_list_with_token_length(experiment_prompt_size),
+        'model': openai_model,
+        }
 
     x_ratelimit_previous_tokens = None
     experiment_start_time = time.time()
 
-    print(f"Starting experiment {experiment_name} on deployment {Fore.GREEN}{az_openai_deployment}{Style.RESET_ALL} with {Fore.GREEN}prompt_size=={experiment_prompt_size}{Style.RESET_ALL} and {Fore.GREEN}max_tokens=={experiment_max_token_limit}{Style.RESET_ALL}")
+    print(f"Starting experiment {experiment_name} on model {Fore.GREEN}{openai_model}{Style.RESET_ALL} with {Fore.GREEN}prompt_size=={experiment_prompt_size}{Style.RESET_ALL} and {Fore.GREEN}max_tokens=={experiment_max_token_limit}{Style.RESET_ALL}")
     try: 
         while time.time() - experiment_start_time < EXPERIMENT_TIMEOUT_SECONDS:
             # Set the max tokens in the header
@@ -163,7 +172,8 @@ for experiment_index, experiment_data in enumerate(experiment_list):
                 data['max_tokens'] = experiment_max_token_limit
 
             # Send request
-            response = requests.post(az_openai_url, headers=headers, json=data)
+            response = requests.post(openai_completion_url, headers=openai_api_headers, json=data)
+            
             status_code = response.status_code
             if status_code == 429:
                 print(f"Response code:{Fore.RED} 429 - Rate limit exceeded")
@@ -174,6 +184,8 @@ for experiment_index, experiment_data in enumerate(experiment_list):
             if 'error' in response_json:
                 print(f"{Fore.RED}Error:{Style.RESET_ALL} {response_json['error']['message']}")
                 raise Exception("Error in response")
+
+            
 
             x_ratelimit_remaining_tokens   = int(response.headers.get("x-ratelimit-remaining-tokens"))
             x_ratelimit_remaining_requests = int(response.headers.get("x-ratelimit-remaining-requests"))
@@ -189,11 +201,11 @@ for experiment_index, experiment_data in enumerate(experiment_list):
                 else:
                     color = Fore.GREEN
 
-                print(f"Model {Fore.GREEN}{az_openai_deployment}{Style.RESET_ALL} - Remaining requests for thr. {x_ratelimit_remaining_requests:>{3}} - Remaning tokens for thr. before {x_ratelimit_previous_tokens:>{6}} - Remaining tokens for thr. now: {x_ratelimit_remaining_tokens:>{6}} - {color}Discounted tokens for thr. {x_ratelimit_discounted_tokens:>{5}}{Style.RESET_ALL} ----- Total Tokens in call: {Fore.BLUE}{api_reported_total_tokens:>{4}}{Style.RESET_ALL} == (Prompt tokens { api_reported_prompt_tokens:>{4}} + Response tokens { api_reported_completion_tokens:>{4}})")
+                print(f"Model {Fore.GREEN}{openai_model}{Style.RESET_ALL} - Remaining requests for thr. {x_ratelimit_remaining_requests:>{3}} - Remaning tokens for thr. before {x_ratelimit_previous_tokens:>{6}} - Remaining tokens for thr. now: {x_ratelimit_remaining_tokens:>{6}} - {color}Discounted tokens for thr. {x_ratelimit_discounted_tokens:>{5}}{Style.RESET_ALL} ----- Total Tokens in call: {Fore.BLUE}{api_reported_total_tokens:>{4}}{Style.RESET_ALL} == (Prompt tokens { api_reported_prompt_tokens:>{4}} + Response tokens { api_reported_completion_tokens:>{4}})")
             else:
                 x_ratelimit_discounted_tokens = None
                 x_ratelimit_previous_tokens  = x_ratelimit_remaining_tokens + api_reported_total_tokens
-                print(f"Model {Fore.GREEN}{az_openai_deployment}{Style.RESET_ALL} - Remaining requests for thr. {x_ratelimit_remaining_requests:>{3}} - Remaning tokens for thr. before {x_ratelimit_previous_tokens:>{6}} - Remaining tokens for thr. now: {x_ratelimit_remaining_tokens:>{6}} - Discounted tokens for thr.    NA ----- Total Tokens in call: {Fore.BLUE}{api_reported_total_tokens:>{4}}{Style.RESET_ALL} == (Prompt tokens { api_reported_prompt_tokens:>{4}} + Response tokens { api_reported_completion_tokens:>{4}})")
+                print(f"Model {Fore.GREEN}{openai_model}{Style.RESET_ALL} - Remaining requests for thr. {x_ratelimit_remaining_requests:>{3}} - Remaning tokens for thr. before {x_ratelimit_previous_tokens:>{6}} - Remaining tokens for thr. now: {x_ratelimit_remaining_tokens:>{6}} - Discounted tokens for thr.    NA ----- Total Tokens in call: {Fore.BLUE}{api_reported_total_tokens:>{4}}{Style.RESET_ALL} == (Prompt tokens { api_reported_prompt_tokens:>{4}} + Response tokens { api_reported_completion_tokens:>{4}})")
            
             
             x_ratelimit_previous_tokens = x_ratelimit_remaining_tokens
@@ -201,11 +213,11 @@ for experiment_index, experiment_data in enumerate(experiment_list):
         experiment_status = 'Success'
     
     except Exception as e:
-        print(f"Experiment {experiment_name} on deployment {az_openai_deployment} terminated with exception: {e}")
+        print(f"Experiment {experiment_name} on model {openai_model} terminated with exception: {e}")
         experiment_status = 'Failure'
 
     experiment_list[experiment_index]['experiment_result'] = experiment_status
-    last_call_to_deployments[az_openai_deployment] = time.time()
+    last_call_to_models[openai_model] = time.time()
 
     print("")
 
